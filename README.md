@@ -7,3 +7,6 @@ This is the repository for the paper "Is Large Language Model All You Need to Pr
 https://arxiv.org/abs/2407.07016
 The code will be released soon.
 
+The GUI example of using CSLLM
+https://github.com/user-attachments/assets/6dda5592-3f69-4a97-9425-f41fc3e1b43b
+
