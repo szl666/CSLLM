@@ -9,4 +9,5 @@ The code will be released soon.
 
 The GUI example of using CSLLM
 
-![CSLLM(2)](https://github.com/user-attachments/assets/0c15a47c-799c-4d8d-92ec-e1505bdebb8c)
+
+![CSLLM(4)](https://github.com/user-attachments/assets/dd2a8cdf-9456-453c-9df6-dc73b7c3aadb)
