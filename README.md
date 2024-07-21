@@ -8,5 +8,5 @@ https://arxiv.org/abs/2407.07016
 The code will be released soon.
 
 The GUI example of using CSLLM
-https://github.com/user-attachments/assets/6dda5592-3f69-4a97-9425-f41fc3e1b43b
 
+![CSLLM(2)](https://github.com/user-attachments/assets/0c15a47c-799c-4d8d-92ec-e1505bdebb8c)
