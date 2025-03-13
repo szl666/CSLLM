@@ -102,11 +102,6 @@ class ChatbotArguments:
             "help": "comma-separated paths to the three model directories (synthesis_llm,method_llm,precursor_llm)"
         },
     )
-    combination_method: Optional[str] = field(
-        default="average",
-        metadata={
-            "help": "method to combine outputs (average, vote, longest)"
-        },
     )
 
 pipeline_name = "inferencer"
@@ -244,82 +239,9 @@ def prepare_model_prompts(structure):
     
     return prompts, structure_description
 
-def combine_outputs(outputs, method="average"):
-    """
-    合并多个模型的输出
-    
-    Args:
-        outputs: 输出字符串字典
-        method: 合并方法 ("average", "vote", "longest")
-    
-    Returns:
-        合并后的输出字符串
-    """
-    # 将字典转换为列表
-    outputs_list = list(outputs.values())
-    
-    if method == "longest":
-        # 返回最长的输出
-        return max(outputs_list, key=len)
-    
-    elif method == "vote":
-        # 按词进行投票
-        word_lists = [output.split() for output in outputs_list]
-        max_len = max(len(words) for words in word_lists)
-        
-        # 用空字符串填充较短的输出
-        for i in range(len(word_lists)):
-            if len(word_lists[i]) < max_len:
-                word_lists[i].extend([''] * (max_len - len(word_lists[i])))
-        
-        # 对每个位置的词进行投票
-        result = []
-        for pos in range(max_len):
-            words_at_pos = [word_list[pos] for word_list in word_lists if pos < len(word_list) and word_list[pos]]
-            if not words_at_pos:
-                break
-                
-            # 计算每个词的出现次数
-            word_counts = {}
-            for word in words_at_pos:
-                if word in word_counts:
-                    word_counts[word] += 1
-                else:
-                    word_counts[word] = 1
-                    
-            # 获取出现最多的词
-            most_common = max(word_counts.items(), key=lambda x: x[1])[0]
-            result.append(most_common)
-            
-        return ' '.join(result)
-    
-    else:  # 默认使用average方法
-        # 基于字符位置的平均
-        min_len = min(len(output) for output in outputs_list)
-        result = ""
-        
-        # 对于每个位置，取最常见的字符
-        for i in range(min_len):
-            chars = [output[i] for output in outputs_list]
-            char_counts = {}
-            for char in chars:
-                if char in char_counts:
-                    char_counts[char] += 1
-                else:
-                    char_counts[char] = 1
-                    
-            most_common_char = max(char_counts.items(), key=lambda x: x[1])[0]
-            result += most_common_char
-            
-        # 添加最长输出的剩余部分
-        longest_output = max(outputs_list, key=len)
-        if len(longest_output) > min_len:
-            result += longest_output[min_len:]
-            
-        return result
 
 def chat_stream_with_structure(structure, history=None):
-    """针对结构的流式对话，使用不同的提示词"""
+    """针对结构的流式对话，使用不同的提示词并直接拼接所有LLM的输出"""
     if history is None:
         history = []
 
@@ -377,20 +299,28 @@ def chat_stream_with_structure(structure, history=None):
             except StopIteration:
                 active_generators.remove(name)
         
-        # 合并当前所有模型的输出
-        combined_output = combine_outputs(model_outputs, chatbot_args.combination_method)
+        # 直接拼接所有模型的输出，不使用combination_method
+        concatenated_output = ""
+        for name in model_names:
+            model_title = f"\n\n## {name.replace('_llm', '').title()} Analysis:\n"
+            concatenated_output += model_title + model_outputs[name]
         
         # 只返回新内容
-        if len(combined_output) > print_index:
-            delta = combined_output[print_index:]
-            print_index = len(combined_output)
-            yield delta, history + [(query, combined_output)]
+        if len(concatenated_output) > print_index:
+            delta = concatenated_output[print_index:]
+            print_index = len(concatenated_output)
+            yield delta, history + [(query, concatenated_output)]
     
-    # 最终合并输出，确保所有内容都返回
-    final_combined = combine_outputs(model_outputs, chatbot_args.combination_method)
-    if len(final_combined) > print_index:
-        delta = final_combined[print_index:]
-        yield delta, history + [(query, final_combined)]
+    # 最终拼接输出，确保所有内容都返回
+    final_concatenated = ""
+    for name in model_names:
+        model_title = f"\n\n## {name.replace('_llm', '').title()} Analysis:\n"
+        final_concatenated += model_title + model_outputs[name]
+    
+    if len(final_concatenated) > print_index:
+        delta = final_concatenated[print_index:]
+        yield delta, history + [(query, final_concatenated)]
+
 
 def chat_stream(query: str, history=None, structure=None):
     """常规流式对话"""
@@ -471,7 +401,7 @@ def visualize_structure(file):
     structure.to(fmt='poscar', filename=temp_file_path)
 
     # VESTA可执行文件路径（根据实际路径修改）
-    vesta_executable = '/home/zhilong666/桌面/VESTA-gtk3/VESTA'
+    vesta_executable = '/VESTA-gtk3/VESTA'
 
     # 调用VESTA命令行工具打开文件
     try:
