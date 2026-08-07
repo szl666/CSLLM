@@ -170,7 +170,7 @@ class LLMExplainer:
             max_memory={i: max_memory for i in range(n_gpus)},
             offload_folder='output_models/finetune_with_lora_sym_50000',
         )
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_auth_token=True)
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name, token=True)
         tokenizer.pad_token = tokenizer.eos_token
 
         return model, tokenizer
@@ -246,117 +246,102 @@ class LLMExplainer:
 # explainer.draw_mendeleev(mean_total_focus['symbols'], -0.1, 0.31, 'total_focus_symbols.svg')
 # explainer.plot_contribution_values(mean_total_focus)
 
-attr_res_all = torch.load('attr_res_all.pt')
-for attr_res in attr_res_all:
-    total_focus = ger_total_focus(attr_res)
-total_focus = ger_mean_total_focus(total_focus,len(attr_res_all))
+def aggregate_total_focus(attr_res_all):
+    """把所有样本的注意力贡献累加后取平均。"""
+    total_focus = defaultdict(float)
+    for attr_res in attr_res_all:
+        for key, value in split_single_focus(attr_res).items():
+            total_focus[key] += value
+    return {key: value / len(attr_res_all) for key, value in total_focus.items()}
 
 
+def split_single_focus(attr_res):
+    """单个样本按 空间群/晶格长度/晶格角度/元素符号/原子位置 五部分拆分贡献。"""
+    focus = defaultdict(float)
+    focus['sp'] = float(attr_res.seq_attr[0])
+    focus['lengths'] = float(attr_res.seq_attr[1])
+    focus['angles'] = float(attr_res.seq_attr[2])
+    atom_num = int((len(attr_res.seq_attr) - 3) / 2)
+    symbol_index = [-2 * i for i in range(1, atom_num + 1)]
+    position_index = [-2 * i + 1 for i in range(1, atom_num + 1)]
+    focus['symbols'] = np.sum([float(attr_res.seq_attr[i]) for i in symbol_index])
+    focus['positions'] = np.sum([float(attr_res.seq_attr[i]) for i in position_index])
+    return focus
 
 
-plt.rcParams['font.size'] = 14
-plt.rcParams['font.sans-serif'] = ['Liberation Sans']
-labels = list(total_focus.keys())
-values = list(total_focus.values())
-fig, ax = plt.subplots()
-bars = ax.bar(labels, values)
-cmap = plt.get_cmap('RdYlGn')
-norm = plt.Normalize(min(values), max(values))
-bar_colors = cmap(norm(values))
+def plot_contribution_values(total_focus, filename='Contribution_value.svg'):
+    plt.rcParams['font.size'] = 14
+    plt.rcParams['font.sans-serif'] = ['Liberation Sans']
+    labels = list(total_focus.keys())
+    values = list(total_focus.values())
+    fig, ax = plt.subplots()
+    bars = ax.bar(labels, values)
+    cmap = plt.get_cmap('RdYlGn')
+    norm = plt.Normalize(min(values), max(values))
+    for bar, color in zip(bars, cmap(norm(values))):
+        bar.set_color(color)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax)
+    cbar.set_label('Contribution value')
+    plt.savefig(filename)
+    plt.show()
 
-# 应用颜色到每个柱子
-for bar, color in zip(bars, bar_colors):
-    bar.set_color(color)
 
-# 添加颜色条
-sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-sm.set_array([])
-cbar = plt.colorbar(sm, ax=ax)
-cbar.set_label('Contribution value')
-plt.savefig('Contribution_value.svg')
-# 显示图表
-plt.show()
+def split_focus_by_label(attr_res_all, pos_token='\u2581True'):
+    """按模型预测的 True/False 分组, 分别给出平均贡献。"""
+    total_sym = defaultdict(float)
+    total_unsym = defaultdict(float)
+    count_sym = count_unsym = 0
+    for attr_res in attr_res_all:
+        focus = split_single_focus(attr_res)
+        if attr_res.output_tokens[0] == pos_token:
+            for key, value in focus.items():
+                total_sym[key] += value
+            count_sym += 1
+        else:
+            for key, value in focus.items():
+                total_unsym[key] += value
+            count_unsym += 1
+    mean = lambda d, n: {k: v / n for k, v in d.items()} if n else {}
+    return mean(total_sym, count_sym), mean(total_unsym, count_unsym)
 
-from collections import defaultdict
-import numpy as np
-total_focus_sym = defaultdict(float)
-total_focus_unsym = defaultdict(float)
-count_sym =0; count_unsym =0
-for attr_res in attr_res_all:
-    if attr_res.output_tokens[0] == '▁False':
-        total_focus_unsym['sp'] += float(attr_res.seq_attr[0])
-        total_focus_unsym['lengths'] += float(attr_res.seq_attr[1])
-        total_focus_unsym['angles'] += float(attr_res.seq_attr[2])
-        atom_num = int((len(attr_res.seq_attr)-3)/2)
-        symbol_index = [-2*i for i in range(1,atom_num+1)]
-        postion_index= [-2*i+1 for i in range(1,atom_num+1)]
-        total_focus_unsym['symbols'] += np.sum([float(attr_res.seq_attr[i]) for i in symbol_index])
-        total_focus_unsym['positions'] += np.sum([float(attr_res.seq_attr[i]) for i in postion_index])
-        count_unsym += 1
-    else:
-        total_focus_sym['sp'] += float(attr_res.seq_attr[0])
-        total_focus_sym['lengths'] += float(attr_res.seq_attr[1])
-        total_focus_sym['angles'] += float(attr_res.seq_attr[2])
-        atom_num = int((len(attr_res.seq_attr)-3)/2)
-        symbol_index = [-2*i for i in range(1,atom_num+1)]
-        postion_index= [-2*i+1 for i in range(1,atom_num+1)]
-        total_focus_sym['symbols'] += np.sum([float(attr_res.seq_attr[i]) for i in symbol_index])
-        total_focus_sym['positions'] += np.sum([float(attr_res.seq_attr[i]) for i in postion_index])
-        count_sym += 1
-total_focus_unsym = ger_mean_total_focus(total_focus_unsym, count_unsym)
-total_focus_sym = ger_mean_total_focus(total_focus_sym, count_sym)
 
-total_focus_sp_sym = defaultdict(int)
-total_focus_symbols_sym = defaultdict(int)
-total_focus_atoms_sym = defaultdict(int)
-count_sp_sym =defaultdict(int)
-count_symbols_sym =defaultdict(int)
-count_atoms_sym =defaultdict(int)
-
-total_focus_sp_unsym = defaultdict(int)
-total_focus_symbols_unsym = defaultdict(int)
-total_focus_atoms_unsym = defaultdict(int)
-count_sp_unsym =defaultdict(int)
-count_symbols_unsym =defaultdict(int)
-count_atoms_unsym =defaultdict(int)
-
-for attr_res in attr_res_all:
-    if attr_res.output_tokens[0] == '▁True':
+def focus_by_group(attr_res_all, pos_token='\u2581True'):
+    """分别按 空间群 / 元素符号 / 元素+位置 统计平均贡献, True 与 False 各一份。"""
+    totals = {label: {key: defaultdict(float) for key in ('sp', 'symbols', 'atoms')}
+              for label in ('sym', 'unsym')}
+    counts = {label: {key: defaultdict(int) for key in ('sp', 'symbols', 'atoms')}
+              for label in ('sym', 'unsym')}
+    for attr_res in attr_res_all:
+        label = 'sym' if attr_res.output_tokens[0] == pos_token else 'unsym'
         sp = list(attr_res.seq_attr_dict.keys())[0]
-        total_focus_sp_sym[sp] += float(list(attr_res.seq_attr_dict.values())[0])
-        atom_num = int((len(attr_res.seq_attr)-3)/2)
-        symbol_index = [-2*i for i in range(1,atom_num+1)]
-        postion_index= [-2*i+1 for i in range(1,atom_num+1)]
-        for index in symbol_index:
+        totals[label]['sp'][sp] += float(list(attr_res.seq_attr_dict.values())[0])
+        counts[label]['sp'][sp] += 1
+        atom_num = int((len(attr_res.seq_attr) - 3) / 2)
+        for index in [-2 * i for i in range(1, atom_num + 1)]:
             symbol = list(attr_res.input_tokens)[index]
-            position = list(attr_res.input_tokens)[index+1]
-            total_focus_symbols_sym[symbol] +=  float(attr_res.seq_attr[index])
-            total_focus_atoms_sym[symbol+position] +=  float(attr_res.seq_attr[index]+attr_res.seq_attr[index+1])
-            count_symbols_sym[symbol] += 1
-            count_atoms_sym[symbol+position] += 1
-        count_sp_sym[sp] += 1
-    else:
-        sp = list(attr_res.seq_attr_dict.keys())[0]
-        total_focus_sp_unsym[sp] += float(list(attr_res.seq_attr_dict.values())[0])
-        atom_num = int((len(attr_res.seq_attr)-3)/2)
-        symbol_index = [-2*i for i in range(1,atom_num+1)]
-        postion_index= [-2*i+1 for i in range(1,atom_num+1)]
-        for index in symbol_index:
-            symbol = list(attr_res.input_tokens)[index]
-            position = list(attr_res.input_tokens)[index+1]
-            total_focus_symbols_unsym[symbol] +=  float(attr_res.seq_attr[index])
-            total_focus_atoms_unsym[symbol+position] +=  float(attr_res.seq_attr[index]+attr_res.seq_attr[index+1])
-            count_symbols_unsym[symbol] += 1
-            count_atoms_unsym[symbol+position] += 1
-        count_sp_unsym[sp] += 1
-
-total_focus_sp_sym = {int(k):v/count_sp_sym[k] for k,v in total_focus_sp_sym.items()}
-total_focus_symbols_sym = {k:v/count_symbols_sym[k] for k,v in total_focus_symbols_sym.items()}
-total_focus_atoms_sym = {k:v/count_atoms_sym[k] for k,v in total_focus_atoms_sym.items()}
-
-total_focus_sp_unsym = {int(k):v/count_sp_unsym[k] for k,v in total_focus_sp_unsym.items()}
-total_focus_symbols_unsym = {k:v/count_symbols_unsym[k] for k,v in total_focus_symbols_unsym.items()}
-total_focus_atoms_unsym = {k:v/count_atoms_unsym[k] for k,v in total_focus_atoms_unsym.items()}
+            position = list(attr_res.input_tokens)[index + 1]
+            totals[label]['symbols'][symbol] += float(attr_res.seq_attr[index])
+            totals[label]['atoms'][symbol + position] += float(
+                attr_res.seq_attr[index] + attr_res.seq_attr[index + 1])
+            counts[label]['symbols'][symbol] += 1
+            counts[label]['atoms'][symbol + position] += 1
+    result = {}
+    for label in ('sym', 'unsym'):
+        result[label] = {
+            'sp': {int(k): v / counts[label]['sp'][k] for k, v in totals[label]['sp'].items()},
+            'symbols': {k: v / counts[label]['symbols'][k] for k, v in totals[label]['symbols'].items()},
+            'atoms': {k: v / counts[label]['atoms'][k] for k, v in totals[label]['atoms'].items()},
+        }
+    return result
 
 
+if __name__ == '__main__':
+    import sys
 
+    attr_res_path = sys.argv[1] if len(sys.argv) > 1 else 'attr_res_all.pt'
+    attr_res_all = torch.load(attr_res_path)
+    plot_contribution_values(aggregate_total_focus(attr_res_all))
+    total_focus_sym, total_focus_unsym = split_focus_by_label(attr_res_all)
+    grouped = focus_by_group(attr_res_all)

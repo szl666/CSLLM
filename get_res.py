@@ -1,32 +1,31 @@
+"""从 LMFlow evaluation 的 slurm 日志抽取预测结果并存成 CSV。
+
+用法: python get_res.py slurm-xxxxx.out [answers.csv]
+
+注意: LMFlow 若以 --answer_type math 运行, 日志里的 "predicted answer:" 是从模型续写中
+抠出来的数字, 其 accuracy 恒为 0, 不可使用; 真实预测在 "prediction=" 文本的
+"Output: True/False" 中。解析逻辑见 result_analyze.get_res_classify。
+"""
+import sys
+
 import pandas as pd
-import re
 
-with open('slurm-4329905.out', 'r') as f:
-    text = f.read()
-# 使用正则表达式从文本中提取预测值和真实值
-pattern = r"Output: ?(\w+)?\s*groundtruth answer: ?(\w+)?"
+from result_analyze import get_res_classify
 
-values = re.findall(pattern, text)
-print(len(values))
-# 将提取的值转换为浮点数，如果值为空，则设置为0
-predicted_values = [val[0] if val[0] else 0 for val in values]
-groundtruth_values = [
-    val[1].strip('K') if val[1] else 0 for val in values
-]
 
-# # 将提取的值转换为浮点数
-# predicted_values = [float(val) if val else 0 for val in predicted_values]
-# groundtruth_values = [
-#     float(val.strip('K')) if val else 0 for val in groundtruth_values
-# ]
-print(len(predicted_values))
-print(len(groundtruth_values))
-# 创建一个 pandas DataFrame
-df = pd.DataFrame({
-    'Predicted': predicted_values,
-    'Groundtruth': groundtruth_values
-})
+def main(slurm_name, csv_path='answers.csv'):
+    structures, predicted_values, groundtruth_values = get_res_classify(slurm_name)
+    df = pd.DataFrame({
+        'Structure': structures,
+        'Predicted': predicted_values,
+        'Groundtruth': groundtruth_values
+    })
+    df.to_csv(csv_path, index=False)
+    print(f'{len(df)} 条结果写入 {csv_path}')
+    return df
 
-# 保存到 CSV 文件
-csv_path = "answers.csv"
-df.to_csv(csv_path, index=False)
+
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    main(*sys.argv[1:3])

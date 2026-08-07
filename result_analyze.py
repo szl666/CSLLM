@@ -1,10 +1,11 @@
+import ast
 import re
 import jellyfish
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm 
-from sklearn.metrics import confusion_matrix, roc_curve, auc, accuracy_score, precision_score, recall_score, f1_score
+import matplotlib.cm as cm
+from sklearn.metrics import confusion_matrix, roc_curve, auc, accuracy_score, precision_score, recall_score, f1_score, matthews_corrcoef, balanced_accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -12,25 +13,57 @@ def calculate_jaro_winkler_distance(text1, text2):
     # 计算Jaro-Winkler距离
     distance = jellyfish.jaro_winkler_similarity(text1, text2)
     return distance
+    
+_Q_KEY, _P_KEY, _G_KEY = "question=", "prediction=", "groundtruth answer:"
+_QUOTED_RE = re.compile(r'"(.*)"\s*\?', re.S)          # 取问句引号里的结构/化学式
+_OUTPUT_RE = re.compile(r"Output\s*[:：]\s*(True|False)\b", re.I)
+_BARE_RE = re.compile(r"\b(True|False)\b", re.I)
+
+
+def parse_slurm_blocks(slurm_name):
+    """逐行状态机解析日志, 返回 [(question, prediction, groundtruth), ...]"""
+    records, cur = [], {}
+    with open(slurm_name, errors="replace") as f:
+        for line in f:
+            s = line.strip()
+            try:
+                if s.startswith("batch_index"):
+                    cur = {}
+                elif s.startswith(_Q_KEY):
+                    cur["q"] = ast.literal_eval(s[len(_Q_KEY):])
+                elif s.startswith(_P_KEY):
+                    cur["p"] = ast.literal_eval(s[len(_P_KEY):])
+                elif s.startswith(_G_KEY):
+                    cur["g"] = ast.literal_eval(s[len(_G_KEY):].strip())
+                    if "q" in cur and "p" in cur:
+                        records.extend(zip(cur["q"], cur["p"], cur["g"]))
+                    cur = {}
+            except (ValueError, SyntaxError):
+                cur = {}
+    return records
+
+
+def extract_formula(question):
+    """从问句里取引号内的结构串/化学式, 去掉 prompt 前缀和结尾的 %。"""
+    q = question[len("input: "):] if question.startswith("input: ") else question
+    m = _QUOTED_RE.search(q)
+    s = m.group(1) if m else q
+    return s.strip().rstrip("%").strip()
+
+
+def _clean(text):
+    return text.replace("Output: ", "").replace("output: ", "")
 
 def get_res(slurm_name,is_str=False,Type=None):
-    with open(slurm_name, 'r') as f:
-        text = f.read()
-    # formula_pattern =  r"question=\['input: How can this material structure be synthesized(.*?)(?=  prediction=)"
-    formula_pattern =  r"How can this material structure be synthesized(.*?)(?=  prediction=)"
-    formulas = re.findall(formula_pattern, text, re.DOTALL)
-    formulas = [i.replace(' "','').replace('\n','').replace('%"?','') for i in formulas]
-    output_pattern =  r"prediction=(.*?)(?=predicted answer:)"
-    predict_values = re.findall(output_pattern, text, re.DOTALL)
-    grouth_truth_pattern = r"groundtruth answer: (.*?)(?=2024)"
-    true_values = re.findall(grouth_truth_pattern, text, re.DOTALL)
-    predict_values = [i.replace('Output: ','').replace('\n','').replace('output: ','') for i in predict_values]
-    true_values = [i.replace('Output: ','').replace('\n','').replace('output: ','') for i in true_values]
+    records = parse_slurm_blocks(slurm_name)
+    formulas = [extract_formula(q) for q, p, g in records]
+    predict_values = [_clean(p) for q, p, g in records]
+    true_values = [_clean(g) for q, p, g in records]
     predict_values_final = []; true_values_final = [];formulas_final = []
     if not is_str:
         if Type:
             for i,j,k in zip(predict_values, true_values,formulas):
-                try:                
+                try:
                     stop_index = i.index(", 'operations'")
                     cut_str = i[:stop_index]+'}'
                     predict_values_final.append(eval(cut_str)[Type])
@@ -41,8 +74,8 @@ def get_res(slurm_name,is_str=False,Type=None):
         else:
             for i,j,k in zip(predict_values, true_values,formulas):
                 try:
-                    predict_values_final.append(eval(i))
-                    true_values_final.append(eval(j))
+                    predict_values_final.append([i])
+                    true_values_final.append([j])
                     formulas_final.append(k)
                 except:
                     pass
@@ -50,33 +83,13 @@ def get_res(slurm_name,is_str=False,Type=None):
         predict_values_final = [i.replace(' ','') for i in predict_values]
         true_values_final = [i.replace(' ','') for i in true_values]
         formulas_final = formulas
-    # predict_values_final1 = []; true_values_final1 = [];formulas_final1 = []
-    # for i,j,k in zip(predict_values_final, true_values_final,formulas_final):
-    #     try:
-    #         predict_values_final1.append(eval(i[0].split('\n')[1]))
-    #         true_values_final1.append(eval(j[0]))
-    #         formulas_final1.append(k.replace("']",''))
-    #     except:
-    #         pass
-    # formulas_final = [i.replace("']",'') for i in formulas_final]
-    # predict_values_final = [eval(i[0].split('\n')[1]) for i in predict_values_final]
-    # true_values_final  = [eval(i[0]) for i in true_values_final]
-    # return formulas_final1, predict_values_final1,true_values_final1
     return formulas_final, predict_values_final,true_values_final
 
 def get_res_new(slurm_name,is_str=False,Type=None):
-    with open(slurm_name, 'r') as f:
-        text = f.read()
-    formula_pattern =  r"question=\['input: How can this material structure be synthesized(.*?)(?=  prediction=)"
-    # formula_pattern =  r"How can this material structure be synthesized(.*?)(?=  prediction=)"
-    formulas = re.findall(formula_pattern, text, re.DOTALL)
-    formulas = [i.replace(' "','').replace('\n','').replace('%"?','') for i in formulas]
-    output_pattern =  r"prediction=(.*?)(?=predicted answer:)"
-    predict_values = re.findall(output_pattern, text, re.DOTALL)
-    grouth_truth_pattern = r"groundtruth answer: (.*?)(?=2024)"
-    true_values = re.findall(grouth_truth_pattern, text, re.DOTALL)
-    predict_values = [i.replace('Output: ','').replace('\n','').replace('output: ','') for i in predict_values]
-    true_values = [i.replace('Output: ','').replace('\n','').replace('output: ','') for i in true_values]
+    records = parse_slurm_blocks(slurm_name)
+    formulas = [extract_formula(q) for q, p, g in records]
+    predict_values = [_clean(p) for q, p, g in records]
+    true_values = [_clean(g) for q, p, g in records]
     predict_values_final = []; true_values_final = [];formulas_final = []
     if not is_str:
         if Type:
@@ -92,8 +105,8 @@ def get_res_new(slurm_name,is_str=False,Type=None):
         else:
             for i,j,k in zip(predict_values, true_values,formulas):
                 try:
-                    predict_values_final.append(eval(i))
-                    true_values_final.append(eval(j))
+                    predict_values_final.append([i])
+                    true_values_final.append([j])
                     formulas_final.append(k)
                 except:
                     pass
@@ -108,34 +121,77 @@ def get_res_new(slurm_name,is_str=False,Type=None):
             predict_values_final1.append(eval(i[0].split('\n')[1][:index+1]))
             true_values_final1.append(eval(j[0]))
             formulas_final1.append(k.replace("']",''))
-        except:
-            print(i[0].split('\n')[1][:index+1])
-    # formulas_final = [i.replace("']",'') for i in formulas_final]
-    # predict_values_final = [eval(i[0].split('\n')[1]) for i in predict_values_final]
-    # true_values_final  = [eval(i[0]) for i in true_values_final]
+        except Exception:
+            print('[get_res_new] 解析失败:', repr(i[0])[:120])
     return formulas_final1, predict_values_final1,true_values_final1
 
-# formulas,predict_values,true_values = get_res('llm_res/slurm-27260.out')
-# formulas,predict_values,true_values = get_res_new('llm_res/slurm-28432.out')
-formulas,predict_values,true_values = get_res_new('llm_res/slurm-29804.out')
-# formulas,predict_values,true_values = get_res_new('llm_res/slurm-29740.out')
-# formulas,predict_values,true_values = get_res_new('llm_res/slurm-27421.out')
+def get_res_classify(slurm_name, keep_unparsed=False):
+    """可合成性二分类任务(Can this material structure be synthesized ...? -> True/False)。"""
+    structures, preds, truths = [], [], []
+    n_block = n_bare = n_drop = 0
+    for q, p, g in parse_slurm_blocks(slurm_name):
+        n_block += 1
+        m = _OUTPUT_RE.search(p)
+        if m is None:
+            m = _BARE_RE.search(p)
+            n_bare += m is not None
+        lab = m.group(1).capitalize() if m else None
+        if lab is None and not keep_unparsed:
+            n_drop += 1
+            continue
+        structures.append(extract_formula(q))
+        preds.append(lab)
+        truths.append(str(g).strip().capitalize())
+    print(f'[get_res_classify] {slurm_name}: 日志 {n_block} 条 -> 返回 {len(preds)} 条'
+          f'(裸 True/False 兜底 {n_bare} 条, 丢弃未解析 {n_drop} 条)')
+    if n_drop:
+        print(f'  注意: 已丢弃 {n_drop} 条未解析样本, 指标分母不含它们; '
+              f'如需按"未解析算错"的严格口径, 用 keep_unparsed=True')
+    return structures, preds, truths
 
-formulas = [i.split('"? ')[0] for i in formulas]
-predict_values_ori = [j for i,j in zip(formulas,predict_values) if 'x' not in i and 'y' not in i and 'z' not in i and '-' not in i and '+' not in i and '/' not in i and '·' not in i]
-true_values_ori = [j for i,j in zip(formulas,true_values) if 'x' not in i and 'y' not in i and 'z' not in i and '-' not in i and '+' not in i and '/' not in i and '·' not in i]
-formulas_ori = [i for i in formulas if 'x' not in i and 'y' not in i and 'z' not in i and '-' not in i and '+' not in i and '/' not in i and '·' not in i]
-from matminer.featurizers.conversions import StrToComposition
-stc = StrToComposition()
-compositions = [];formulas=[];true_values=[];predict_values=[]
-for formula,pred, true in zip(formulas_ori,predict_values_ori, true_values_ori):
-    try:
-        compositions.append(stc.featurize(formula)[0])
-        predict_values.append(pred)
-        true_values.append(true)
-        formulas.append(formula)
-    except:
-        print(formula)
+
+def eval_classify(structures, predict_values, true_values, pos_label='True',
+                  save_name=None, plot=False):
+    """算混淆矩阵与各项指标, 返回 (三列表格 DataFrame, 指标 dict)"""
+    df = pd.DataFrame({'structure': structures,
+                       'ground_truth': true_values,
+                       'prediction': predict_values})
+    ok = df['prediction'].notna()
+    y_true, y_pred = df.loc[ok, 'ground_truth'], df.loc[ok, 'prediction']
+    labels = [pos_label, 'False' if pos_label == 'True' else 'True']
+    tp, fn, fp, tn = confusion_matrix(y_true, y_pred, labels=labels).ravel()
+    kw = dict(pos_label=pos_label, zero_division=0)
+    m = {'n_total': len(df), 'n_scored': int(ok.sum()), 'n_unparsed': int((~ok).sum()),
+         'TP': int(tp), 'FP': int(fp), 'FN': int(fn), 'TN': int(tn),
+         'accuracy': accuracy_score(y_true, y_pred),
+         'balanced_accuracy': balanced_accuracy_score(y_true, y_pred),
+         'mcc': matthews_corrcoef(y_true, y_pred),
+         'precision': precision_score(y_true, y_pred, **kw),
+         'recall': recall_score(y_true, y_pred, **kw),
+         'f1': f1_score(y_true, y_pred, **kw),
+         'specificity': tn / (tn + fp) if tn + fp else float('nan'),
+         'npv': tn / (tn + fn) if tn + fn else float('nan')}
+    print(f"覆盖 {m['n_scored']}/{m['n_total']} (未解析 {m['n_unparsed']})")
+    print('混淆矩阵 (行=真值, 列=预测)')
+    print(f"              pred {pos_label:<6} pred other")
+    print(f"  true {pos_label:<8}{tp:>8}{fn:>11}")
+    print(f"  true other  {fp:>8}{tn:>11}")
+    for k in ('accuracy', 'balanced_accuracy', 'mcc', 'precision', 'recall',
+              'f1', 'specificity', 'npv'):
+        print(f'  {k:<18}= {m[k]:.4f}')
+    if save_name:
+        df.to_csv(save_name, index=False)
+        print('表格写出', save_name)
+    if plot:
+        plt.figure(figsize=(4.5, 4))
+        sns.heatmap([[tp, fn], [fp, tn]], annot=True, fmt='d', cmap='Blues', cbar=False,
+                    xticklabels=[f'pred {labels[0]}', f'pred {labels[1]}'],
+                    yticklabels=[f'true {labels[0]}', f'true {labels[1]}'])
+        plt.tight_layout()
+        if save_name:
+            plt.savefig(str(save_name).rsplit('.', 1)[0] + '_cm.svg')
+        plt.show()
+    return df, m
 
 from collections import Counter
 import matplotlib.cm as cm
@@ -148,7 +204,6 @@ def draw_pie(element_counts,save_name,remove_0_key=True,preflix=None):
     sizes = list(element_counts.values())
     sizes = [abs(i) for i in sizes]
     labels = list(element_counts.keys())
-    # labels = [f'{preflix}{}']
     colors = cm.Set2.colors[:len(labels)]
     fig, ax = plt.subplots(figsize=(18, 6))  # Keeping a manageable figure size
     edge_props = {'edgecolor': 'grey', 'linewidth': 1, 'alpha': 0.6} 
@@ -165,7 +220,6 @@ def draw_pie(element_counts,save_name,remove_0_key=True,preflix=None):
             text.set_visible(True)
     legend = ax.legend(wedges, labels, title=preflix,loc="center left", bbox_to_anchor=(1, 0, 0.5, 1))
     legend.get_frame().set_edgecolor('none') 
-    # plt.tight_layout()
     plt.savefig(save_name)
     plt.show()
 
@@ -205,48 +259,4 @@ def cal_precursor_res_all(formulas, predict_values,true_values, all_precursors,s
     draw_pie(success_counts,f'success_counts_{save_name}.svg',remove_0_key=False)
     draw_pie(miss_redun_counts,f'miss_redun_counts_{save_name}.svg',preflix='Number of missing/excess precursors')
     draw_pie(error_lengths_counts,f'error_lengths_counts_{save_name}.svg',preflix='Number of wrong precursors')
-    # draw_Mean_distances(mean_max_distances,f'Mean_distances_formula_solid_{save_name}.svg')
     return np.mean(mean_max_distances),success_rate,mean_max_distances,max_distances,true_res_len,miss_redun_counts,error_lengths_counts
-
-mean_distances,success_rate,mean_max_distances1 = cal_precursor_res(predict_values,true_values)
-print(mean_distances)
-print(success_rate)
-
-mean_distances,success_rate,mean_max_distances,max_distances,true_res_len,miss_redun_counts,error_lengths_counts = cal_precursor_res_all(formulas, predict_values,true_values, all_precursors,'8B_more_data1')
-print(mean_distances)
-print(success_rate)
-
-answers = pd.read_csv('answers1.csv')
-y_true = answers['Groundtruth']
-y_pred = answers['Predicted']
-y_true_int = np.array(y_true, dtype=int)
-y_pred_int = np.array(y_pred, dtype=int)
-TP = np.sum((y_true_int == 1) & (y_pred_int == 1))
-TN = np.sum((y_true_int == 0) & (y_pred_int == 0))
-FP = np.sum((y_true_int == 0) & (y_pred_int == 1))
-FN = np.sum((y_true_int == 1) & (y_pred_int == 0))
-confusion_mat = np.array([[FP, TN],
-                          [TP, FN]])*10
-confusion_mat[0][0] -= 2
-confusion_mat[0][1] += 5
-confusion_mat[1][0] += 1
-confusion_mat[1][1] -= 2
-plt.figure(figsize=(12, 10))
-plt.rcParams['font.size'] = 24
-plt.rcParams['font.sans-serif'] = ['Liberation Sans']
-sns.heatmap(confusion_mat, annot=True, fmt="d", cmap='Blues', xticklabels=['Synthesizable', 'Unsynthesizable'], yticklabels=['Unsynthesizable', 'Synthesizable'])
-plt.xlabel('Predicted')
-plt.ylabel('Truth')
-plt.savefig('llm_cm.svg',bbox_inches='tight')
-plt.show()
-
-accuracy = accuracy_score(y_true, y_pred)
-precision = precision_score(y_true, y_pred)
-recall = recall_score(y_true, y_pred)
-f1 = f1_score(y_true, y_pred)
-
-print(f"Accuracy: {accuracy}")
-print(f"Precision: {precision}")
-print(f"Recall: {recall}")
-print(f"F1 Score: {f1}")
-
