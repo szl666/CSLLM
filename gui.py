@@ -28,8 +28,13 @@ def img_to_base64(img_path):
         return base64.b64encode(img_file.read()).decode('utf-8')
 
 # 将图像路径转换为 base64 编码
-img_base64 = img_to_base64("icon.png")
-img_html = f'<img src="data:image/png;base64,{img_base64}" alt="LMFlow" style="width: 30%; min-width: 60px; display: block; margin: auto; background-color: transparent;">'
+icon_path = "icon.png"
+if os.path.exists(icon_path):
+    img_base64 = img_to_base64(icon_path)
+    img_html = f'<img src="data:image/png;base64,{img_base64}" alt="CSLLM" style="width: 30%; min-width: 60px; display: block; margin: auto; background-color: transparent;">'
+else:
+    # 如果图标不存在，使用空的HTML
+    img_html = '<div style="height: 20px;"></div>'
 
 MAX_BOXES = 20
 
@@ -102,6 +107,11 @@ class ChatbotArguments:
             "help": "comma-separated paths to the three model directories (synthesis_llm,method_llm,precursor_llm)"
         },
     )
+    vesta_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "path to VESTA executable (optional, for structure visualization)"
+        },
     )
 
 pipeline_name = "inferencer"
@@ -401,11 +411,25 @@ def visualize_structure(file):
     structure.to(fmt='poscar', filename=temp_file_path)
 
     # VESTA可执行文件路径（根据实际路径修改）
-    vesta_executable = '/VESTA-gtk3/VESTA'
+    # 优先使用命令行参数，其次尝试系统路径
+    vesta_executable = chatbot_args.vesta_path
+    
+    if vesta_executable is None:
+        # 尝试使用系统PATH中的VESTA
+        import platform
+        system = platform.system()
+        if system == 'Windows':
+            vesta_executable = 'VESTA.exe'  # Windows下默认名称
+        elif system == 'Darwin':  # macOS
+            vesta_executable = 'VESTA'
+        else:  # Linux
+            vesta_executable = 'VESTA'
 
     # 调用VESTA命令行工具打开文件
     try:
         subprocess.Popen([vesta_executable, temp_file_path])
+    except FileNotFoundError:
+        return f"VESTA not found. Please install VESTA or specify the path using --vesta_path argument.", structure
     except Exception as e:
         return f"Failed to open VESTA: {str(e)}", structure
 
@@ -418,7 +442,6 @@ with gr.Blocks(css=css) as demo:
     
     with gr.Accordion("Model Configuration", open=False):
         gr.Markdown(f"Using models: {model_display_info}")
-        gr.Markdown(f"Combination method: {chatbot_args.combination_method}")
     
     state = gr.State([])
     current_structure = gr.State(None)  # 存储当前结构

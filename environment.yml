@@ -1,4 +1,4 @@
-name: lmflow
+name: csllm
 channels:
   - bioconda
   - ursky
@@ -211,6 +211,5 @@ dependencies:
     - wheel==0.43.0
     - xxhash==3.2.0
     - yarl==1.8.2
-    - zipp==3.15.0
-    - zstandard==0.22.0
-prefix: /data1/home/hhu01/anaconda3/envs/lmflow
+  - zipp==3.15.0
+  - zstandard==0.22.0
